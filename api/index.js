@@ -13,6 +13,7 @@ const {
   SESSION_SECRET
 } = process.env;
 
+// Exact Discord OAuth callback URL
 const DISCORD_REDIRECT_URI =
   "https://tst-discord-backend.vercel.app/auth/discord/callback";
 
@@ -28,13 +29,16 @@ app.use(
   })
 );
 
-// -------------------------
-// Session helpers
-// -------------------------
+// ===============================
+// SESSION
+// ===============================
 
 function sign(value) {
   return crypto
-    .createHmac("sha256", SESSION_SECRET || "change-me")
+    .createHmac(
+      "sha256",
+      SESSION_SECRET || "change-this-session-secret"
+    )
     .update(value)
     .digest("hex");
 }
@@ -55,11 +59,15 @@ function createSession(user) {
 function getSession(req) {
   const raw = req.cookies.tst_session;
 
-  if (!raw) return null;
+  if (!raw) {
+    return null;
+  }
 
   const dot = raw.lastIndexOf(".");
 
-  if (dot < 1) return null;
+  if (dot < 1) {
+    return null;
+  }
 
   const payload = raw.slice(0, dot);
   const signature = raw.slice(dot + 1);
@@ -90,9 +98,9 @@ function getSession(req) {
   }
 }
 
-// -------------------------
-// Health check
-// -------------------------
+// ===============================
+// HEALTH CHECK
+// ===============================
 
 app.get("/health", (req, res) => {
   res.json({
@@ -101,11 +109,17 @@ app.get("/health", (req, res) => {
   });
 });
 
-// -------------------------
-// Discord OAuth
-// -------------------------
+// ===============================
+// DISCORD LOGIN
+// ===============================
 
 app.get("/auth/discord", (req, res) => {
+  if (!DISCORD_CLIENT_ID) {
+    return res
+      .status(500)
+      .send("DISCORD_CLIENT_ID is missing.");
+  }
+
   const params = new URLSearchParams({
     client_id: DISCORD_CLIENT_ID,
     response_type: "code",
@@ -113,14 +127,18 @@ app.get("/auth/discord", (req, res) => {
     scope: "identify guilds"
   });
 
-  res.redirect(
-    `https://discord.com/oauth2/authorize?${params.toString()}`
-  );
+  const discordURL =
+    "https://discord.com/oauth2/authorize?" +
+    params.toString();
+
+  console.log("Discord OAuth URL:", discordURL);
+
+  res.redirect(discordURL);
 });
 
-// -------------------------
-// Discord OAuth callback
-// -------------------------
+// ===============================
+// DISCORD CALLBACK
+// ===============================
 
 app.get("/auth/discord/callback", async (req, res) => {
   try {
@@ -132,68 +150,136 @@ app.get("/auth/discord/callback", async (req, res) => {
         .send("Missing Discord authorization code.");
     }
 
-    // Exchange OAuth code for token
+    if (!DISCORD_CLIENT_ID) {
+      return res
+        .status(500)
+        .send("DISCORD_CLIENT_ID is missing.");
+    }
+
+    if (!DISCORD_CLIENT_SECRET) {
+      return res
+        .status(500)
+        .send("DISCORD_CLIENT_SECRET is missing.");
+    }
+
+    // ===========================
+    // GET DISCORD ACCESS TOKEN
+    // ===========================
+
     const tokenResponse = await fetch(
       "https://discord.com/api/oauth2/token",
       {
         method: "POST",
+
         headers: {
           "Content-Type":
             "application/x-www-form-urlencoded"
         },
+
         body: new URLSearchParams({
           client_id: DISCORD_CLIENT_ID,
           client_secret: DISCORD_CLIENT_SECRET,
           grant_type: "authorization_code",
-          code,
+          code: code,
           redirect_uri: DISCORD_REDIRECT_URI
         })
       }
     );
 
     if (!tokenResponse.ok) {
-  const discordError = await tokenResponse.text();
+      const discordError =
+        await tokenResponse.text();
 
-  console.error("Discord token error:", discordError);
+      console.error(
+        "Discord token error:",
+        discordError
+      );
 
-  return res
-    .status(401)
-    .send("Discord token error: " + discordError);
+      return res
+        .status(401)
+        .send(
+          "Discord token error: " +
+            discordError
+        );
     }
 
     const token = await tokenResponse.json();
 
-    const headers = {
-      Authorization: `Bearer ${token.access_token}`
-    };
-
-    // Get Discord user + servers
-    const [userResponse, guildResponse] =
-      await Promise.all([
-        fetch(
-          "https://discord.com/api/users/@me",
-          { headers }
-        ),
-        fetch(
-          "https://discord.com/api/users/@me/guilds",
-          { headers }
-        )
-      ]);
-
-    if (!userResponse.ok || !guildResponse.ok) {
+    if (!token.access_token) {
       return res
         .status(401)
-        .send("Could not verify Discord account.");
+        .send(
+          "Discord did not return an access token."
+        );
     }
 
-    const user = await userResponse.json();
-    const guilds = await guildResponse.json();
+    // ===========================
+    // DISCORD USER + SERVERS
+    // ===========================
 
-    // Check TST Discord membership
+    const headers = {
+      Authorization:
+        `Bearer ${token.access_token}`
+    };
+
+    const [
+      userResponse,
+      guildResponse
+    ] = await Promise.all([
+      fetch(
+        "https://discord.com/api/users/@me",
+        {
+          headers
+        }
+      ),
+
+      fetch(
+        "https://discord.com/api/users/@me/guilds",
+        {
+          headers
+        }
+      )
+    ]);
+
+    if (!userResponse.ok) {
+      const error =
+        await userResponse.text();
+
+      return res
+        .status(401)
+        .send(
+          "Could not get Discord user: " +
+            error
+        );
+    }
+
+    if (!guildResponse.ok) {
+      const error =
+        await guildResponse.text();
+
+      return res
+        .status(401)
+        .send(
+          "Could not get Discord servers: " +
+            error
+        );
+    }
+
+    const user =
+      await userResponse.json();
+
+    const guilds =
+      await guildResponse.json();
+
+    // ===========================
+    // CHECK TST SERVER
+    // ===========================
+
     const isMember =
       Array.isArray(guilds) &&
       guilds.some(
-        guild => guild.id === DISCORD_GUILD_ID
+        guild =>
+          guild.id === DISCORD_GUILD_ID
       );
 
     if (!isMember) {
@@ -204,68 +290,100 @@ app.get("/auth/discord/callback", async (req, res) => {
         );
     }
 
-    // Create login session
-    const session = createSession(user);
+    // ===========================
+    // CREATE SESSION
+    // ===========================
 
-    res.cookie("tst_session", session, {
-      httpOnly: true,
-      secure: true,
-      sameSite: "none",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-      path: "/"
-    });
+    const session =
+      createSession(user);
 
-    // Send user back to website
-    res.redirect(frontend);
+    res.cookie(
+      "tst_session",
+      session,
+      {
+        httpOnly: true,
+        secure: true,
+        sameSite: "none",
+        maxAge:
+          7 * 24 * 60 * 60 * 1000,
+        path: "/"
+      }
+    );
+
+    // ===========================
+    // SEND USER BACK TO WEBSITE
+    // ===========================
+
+    res.redirect(
+      frontend || "/"
+    );
 
   } catch (error) {
-    console.error("Discord OAuth error:", error);
+    console.error(
+      "Discord OAuth error:",
+      error
+    );
 
     res
       .status(500)
-      .send("Discord verification failed.");
+      .send(
+        "Discord verification failed: " +
+          error.message
+      );
   }
 });
 
-// -------------------------
-// Verification status
-// -------------------------
+// ===============================
+// CHECK LOGIN STATUS
+// ===============================
 
-app.get("/api/discord/status", (req, res) => {
-  const session = getSession(req);
+app.get(
+  "/api/discord/status",
+  (req, res) => {
+    const session =
+      getSession(req);
 
-  res.json({
-    verified: Boolean(session),
+    res.json({
+      verified: Boolean(session),
 
-    user: session
-      ? {
-          id: session.id,
-          username: session.username,
-          global_name: session.global_name
-        }
-      : null
-  });
-});
+      user: session
+        ? {
+            id: session.id,
+            username:
+              session.username,
+            global_name:
+              session.global_name
+          }
+        : null
+    });
+  }
+);
 
-// -------------------------
-// Logout
-// -------------------------
+// ===============================
+// LOGOUT
+// ===============================
 
-app.post("/auth/logout", (req, res) => {
-  res.clearCookie("tst_session", {
-    httpOnly: true,
-    secure: true,
-    sameSite: "none",
-    path: "/"
-  });
+app.post(
+  "/auth/logout",
+  (req, res) => {
+    res.clearCookie(
+      "tst_session",
+      {
+        httpOnly: true,
+        secure: true,
+        sameSite: "none",
+        path: "/"
+      }
+    );
 
-  res.json({
-    ok: true
-  });
-});
+    res.json({
+      ok: true
+    });
+  }
+);
 
-// -------------------------
-// Vercel export
-// -------------------------
+// ===============================
+// VERCEL
+// ===============================
 
 module.exports = app;
