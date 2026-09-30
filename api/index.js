@@ -9,10 +9,12 @@ const {
   DISCORD_CLIENT_ID,
   DISCORD_CLIENT_SECRET,
   DISCORD_GUILD_ID,
-  DISCORD_REDIRECT_URI,
   FRONTEND_URL,
   SESSION_SECRET
 } = process.env;
+
+const DISCORD_REDIRECT_URI =
+  "https://tst-discord-backend.vercel.app/auth/discord/callback";
 
 const frontend = (FRONTEND_URL || "").replace(/\/$/, "");
 
