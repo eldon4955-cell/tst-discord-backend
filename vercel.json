@@ -1,24 +1,8 @@
 {
   "rewrites": [
     {
-      "source": "/auth/discord",
-      "destination": "/api/index.js/auth/discord"
-    },
-    {
-      "source": "/auth/discord/callback",
-      "destination": "/api/index.js/auth/discord/callback"
-    },
-    {
-      "source": "/api/discord/status",
-      "destination": "/api/index.js/api/discord/status"
-    },
-    {
-      "source": "/auth/logout",
-      "destination": "/api/index.js/auth/logout"
-    },
-    {
-      "source": "/health",
-      "destination": "/api/index.js/health"
+      "source": "/(.*)",
+      "destination": "/api"
     }
   ]
 }
