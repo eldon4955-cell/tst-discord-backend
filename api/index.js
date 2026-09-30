@@ -152,9 +152,13 @@ app.get("/auth/discord/callback", async (req, res) => {
     );
 
     if (!tokenResponse.ok) {
-      return res
-        .status(401)
-        .send("Discord authorization failed.");
+  const discordError = await tokenResponse.text();
+
+  console.error("Discord token error:", discordError);
+
+  return res
+    .status(401)
+    .send("Discord token error: " + discordError);
     }
 
     const token = await tokenResponse.json();
